@@ -1,29 +1,42 @@
 # tianting-ops
 
-天听运维后台 H5。**天听**是自研 IM 平台，替换腾讯 IM（聊天、群聊、聊天室、站内推送）。
+天听运维后台：总览、节点、指标入口、连接排查、配置检查、数据库与备份、审计、账号管理。**天听**是自研 IM 平台，替换腾讯 IM。
 
-运维用的后台：节点与在线连接排查、配置检查、备份记录（只读）、审计；图表和告警用 Grafana + Prometheus + Alertmanager。
+|            |                                                                                                                                    |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| 状态       | 第一批页面完成（FE-500～FE-506），第二批（告警静默、双人批准）未开始                                                               |
+| 技术       | React + Vite + TypeScript，没有组件库                                                                                              |
+| 后端       | 只调用 console-server 的 `/console/api/*`（同源、Cookie 会话）。**浏览器里没有任何节点凭证**，节点运维接口只有 console-server 能调 |
+| 需求和任务 | tianting-server 的 `docs/prd/PRD-ops-v1.0.md`、`docs/tasks/frontend-ops.md`                                                        |
 
-| | |
-|---|---|
-| 状态 | 尚未开始，排在工作队列 Q14、Q15 |
-| 技术 | React，只调用后台服务（console-server，部署在内网 / VPN 后） |
-| 服务端、协议、需求文档 | [tianting-server](https://github.com/leetonny001/tianting-server) |
-| 工作队列 / 日报 | tianting-server 的 `docs/process/QUEUE.md`、`docs/reports/daily/` |
+## 约定
 
-需求：tianting-server 的 `docs/prd/PRD-ops`，拍板项 O-1、O-2 见 `docs/review/DECISIONS-2026-11-03.md`。
+- **CSP 比管理后台更严**：`style-src 'self'`、`img-src 'self'`，没有 nonce，也不允许 `data:`。样式全在 `src/app.css`，二维码是内联 SVG。
+- **不加载任何外部资源**：`npm run check:dist` 扫描构建产物。
+- **数据不可用不显示 0**：卡片显示"数据不可用"和原因；告警不可用绝不显示"当前没有告警"。
+- **有节点没响应不说"不在线"**：`partial` 时只说在已响应的节点上没找到。
+- **排查的 userId、工单号、理由不进 URL**：只在 POST 请求体和组件状态里。
+- **自动刷新**带 `X-Console-Background: 1`，不续期空闲计时；页面不可见时停止。
+- **关闭码含义**来自协议：`node scripts/gen-close-codes.mjs` 从 `errors.json` 生成 `src/lib/closeCodes.ts`，不手抄。
 
-## 天听的项目
+和 tianting-admin 共用的页面（登录、账号、审计、通知、设置）和基础组件目前是复制的，两边改动要同步。
 
-| 仓库 | 内容 |
-|---|---|
-| [tianting-server](https://github.com/leetonny001/tianting-server) | Go 服务端、协议、需求 / 架构 / 测试文档 |
-| [tianting-sdk-ts](https://github.com/leetonny001/tianting-sdk-ts) | SDK（TypeScript）：H5、PC |
-| [tianting-sdk-kotlin](https://github.com/leetonny001/tianting-sdk-kotlin) | SDK（Kotlin）：Android |
-| [tianting-sdk-swift](https://github.com/leetonny001/tianting-sdk-swift) | SDK（Swift）：iOS |
-| [tianting-web](https://github.com/leetonny001/tianting-web) | H5 客户端 |
-| [tianting-desktop](https://github.com/leetonny001/tianting-desktop) | PC 客户端 |
-| [tianting-android](https://github.com/leetonny001/tianting-android) | Android 客户端 |
-| [tianting-ios](https://github.com/leetonny001/tianting-ios) | iOS 客户端 |
-| [tianting-admin](https://github.com/leetonny001/tianting-admin) | 管理后台 H5 |
-| [tianting-ops](https://github.com/leetonny001/tianting-ops) | 运维后台 H5 |
+## 开发和测试
+
+```bash
+npm install
+```
+
+```bash
+npm run lint && npm test && npm run build && npm run check:dist
+```
+
+```bash
+npm run e2e
+```
+
+`e2e/stack.mjs` 启动真实的 console-server、两个 im-server（n1、n2）和 Postgres。Prometheus、Alertmanager、备份桶和 Grafana 在开发机上没有，用假服务代替，真实联调要等测试环境（tianting-server BE-320）。
+
+## 部署
+
+构建产物 `dist/` 由 console-server 托管（`CON_OPS_WEB_DIR`）。
