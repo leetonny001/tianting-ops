@@ -410,7 +410,7 @@ test('指标：票据跳转，身份只来自代理，退出后失效（AC-OPS-1
   const v = await provision('view', 'ops_viewer');
   await login(page, v);
   await page.getByRole('navigation', { name: '主菜单' }).getByRole('button', { name: '指标' }).click();
-  await expect(page.locator('#who')).toHaveText(`Grafana:${v.username}`);
+  await expect(page.locator('#who')).toHaveText(`Grafana:ops-${v.username}`);
   expect(new URL(page.url()).hostname).toBe('grafana.ops.localhost');
   // 地址栏没有留下票据。
   expect(page.url()).not.toContain('ticket');
