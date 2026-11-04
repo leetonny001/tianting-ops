@@ -7,7 +7,7 @@
 | 状态       | 第一批页面完成（FE-500～FE-506），第二批（告警静默、双人批准）未开始                                                               |
 | 技术       | React + Vite + TypeScript，没有组件库                                                                                              |
 | 后端       | 只调用 console-server 的 `/console/api/*`（同源、Cookie 会话）。**浏览器里没有任何节点凭证**，节点运维接口只有 console-server 能调 |
-| 需求和任务 | tianting-server 的 `docs/prd/PRD-ops-v1.0.md`、`docs/tasks/frontend-ops.md`                                                        |
+| 需求和任务 | tianting-server 的 `docs/prd/PRD-ops-v1.1.md`、`docs/tasks/frontend-ops.md`                                                        |
 
 ## 约定
 
