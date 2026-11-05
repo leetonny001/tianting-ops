@@ -30,10 +30,33 @@ function RolePicker({ value, onChange }: { value: string[]; onChange: (v: string
   );
 }
 
-function ActivationCode({ username, code, onClose }: { username: string; code: string; onClose: () => void }) {
+/** 授予后不马上生效的角色（F-OPS-02 规则 6）。这里只是提示，以服务端返回的 pendingRoles 为准。 */
+const NEEDS_APPROVAL = ['ops_engineer'];
+
+function ApprovalHint({ roles, before = [] }: { roles: string[]; before?: string[] }) {
+  if (!roles.some((r) => NEEDS_APPROVAL.includes(r) && !before.includes(r))) return null;
+  return <p className="note note-warn">授予排障工程师需要另一名运维超管批准后才生效。</p>;
+}
+
+function ActivationCode({
+  username,
+  code,
+  pending,
+  onClose,
+}: {
+  username: string;
+  code: string;
+  pending?: string[];
+  onClose: () => void;
+}) {
   return (
     <Modal title="激活码" onClose={onClose}>
       <p className="note note-warn">激活码只显示这一次，24 小时内有效。请用安全的方式发给本人。</p>
+      {pending && pending.length > 0 && (
+        <p className="note note-warn">
+          {pending.map((r) => roleNames[r] ?? r).join('、')}角色待批准：需要另一名运维超管在账号管理里批准后才生效。
+        </p>
+      )}
       <p>
         账号：<Text>{username}</Text>
       </p>
@@ -53,7 +76,8 @@ type Dialog =
   | { kind: 'create' }
   | { kind: 'roles'; account: AccountRow }
   | { kind: 'action'; account: AccountRow; action: 'disable' | 'enable' | 'reset' | 'unlock' }
-  | { kind: 'code'; username: string; code: string }
+  | { kind: 'code'; username: string; code: string; pending?: string[] }
+  | { kind: 'approve'; account: AccountRow; role: string; requestedBy: string }
   | null;
 
 const actionText = {
@@ -63,7 +87,13 @@ const actionText = {
   unlock: { label: '解锁', body: '清除登录失败计数，账号可以立即再次尝试登录。', danger: false },
 };
 
-function CreateDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (u: string, c: string) => void }) {
+function CreateDialog({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: (u: string, c: string, pending?: string[]) => void;
+}) {
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [roles, setRoles] = useState<string[]>([]);
@@ -74,12 +104,12 @@ function CreateDialog({ onClose, onCreated }: { onClose: () => void; onCreated: 
     setBusy(true);
     setError(null);
     try {
-      const r = await api<{ activationCode: string }>('POST', '/console/api/accounts', {
+      const r = await api<{ activationCode: string; pendingRoles?: string[] }>('POST', '/console/api/accounts', {
         username: username.trim(),
         displayName: displayName.trim(),
         roles,
       });
-      onCreated(username.trim(), r.activationCode);
+      onCreated(username.trim(), r.activationCode, r.pendingRoles);
     } catch (err) {
       setError(err);
       setBusy(false);
@@ -103,6 +133,7 @@ function CreateDialog({ onClose, onCreated }: { onClose: () => void; onCreated: 
           {(id) => <input id={id} value={displayName} onChange={(e) => setDisplayName(e.target.value)} />}
         </Field>
         <RolePicker value={roles} onChange={setRoles} />
+        <ApprovalHint roles={roles} />
         <ErrorNote error={error} />
         <div className="modal-actions">
           <button type="button" className="btn" onClick={onClose}>
@@ -118,7 +149,8 @@ function CreateDialog({ onClose, onCreated }: { onClose: () => void; onCreated: 
 }
 
 function RolesDialog({ account, onClose, onDone }: { account: AccountRow; onClose: () => void; onDone: () => void }) {
-  const [roles, setRoles] = useState(account.roles);
+  // 待批准的角色算在里面：不勾掉就继续等批准，勾掉就撤回。
+  const [roles, setRoles] = useState(() => [...account.roles, ...(account.pendingRoles ?? []).map((p) => p.role)]);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const submit = async (e: FormEvent) => {
@@ -137,6 +169,7 @@ function RolesDialog({ account, onClose, onDone }: { account: AccountRow; onClos
       <form onSubmit={submit}>
         <p className="modal-body">角色变化后，该账号需要重新登录。</p>
         <RolePicker value={roles} onChange={setRoles} />
+        <ApprovalHint roles={roles} before={account.roles} />
         <ErrorNote error={error} />
         <div className="modal-actions">
           <button type="button" className="btn" onClick={onClose}>
@@ -192,7 +225,18 @@ export function AccountsPage() {
               <td>
                 <Text>{a.displayName}</Text>
               </td>
-              <td>{a.roles.map((r) => roleNames[r] ?? r).join('、') || '—'}</td>
+              <td>
+                {a.roles.map((r) => roleNames[r] ?? r).join('、') || '—'}
+                {a.pendingRoles?.map((p) => (
+                  <div key={p.role}>
+                    <Badge tone="warn">待批准</Badge> {roleNames[p.role] ?? p.role}
+                    <div className="muted">
+                      <Text>{p.requestedBy}</Text> 发起
+                      {p.requestedBy === session?.account.username && '，需要另一名运维超管批准'}
+                    </div>
+                  </div>
+                ))}
+              </td>
               <td>
                 {a.status === 'active' ? (
                   <Badge tone="good">启用</Badge>
@@ -205,6 +249,17 @@ export function AccountsPage() {
               </td>
               <td>{formatTime(a.activatedAt)}</td>
               <td className="actions">
+                {/* 谁能批准只由服务端判断：发起人点了会收到 4030，界面不替它决定（FE-521）。 */}
+                {a.pendingRoles?.map((p) => (
+                  <button
+                    key={p.role}
+                    type="button"
+                    className="link"
+                    onClick={() => setDialog({ kind: 'approve', account: a, role: p.role, requestedBy: p.requestedBy })}
+                  >
+                    批准
+                  </button>
+                ))}
                 {a.id === selfId ? (
                   <span className="muted">自己的账号</span>
                 ) : (
@@ -256,8 +311,8 @@ export function AccountsPage() {
       {dialog?.kind === 'create' && (
         <CreateDialog
           onClose={() => setDialog(null)}
-          onCreated={(username, code) => {
-            setDialog({ kind: 'code', username, code });
+          onCreated={(username, code, pending) => {
+            setDialog({ kind: 'code', username, code, pending });
             load();
           }}
         />
@@ -291,8 +346,27 @@ export function AccountsPage() {
           {actionText[dialog.action].body}
         </ConfirmDialog>
       )}
+      {dialog?.kind === 'approve' && (
+        <ConfirmDialog
+          title={`批准 ${dialog.account.username} 的角色`}
+          confirmLabel="批准"
+          onClose={() => setDialog(null)}
+          onConfirm={async () => {
+            await api('POST', `/console/api/accounts/${dialog.account.id}/roles/approve`, { role: dialog.role });
+            load();
+          }}
+        >
+          <Text>{dialog.requestedBy}</Text> 授予 <Text>{dialog.account.username}</Text> 角色「
+          {roleNames[dialog.role] ?? dialog.role}」。批准后马上生效，该账号需要重新登录。
+        </ConfirmDialog>
+      )}
       {dialog?.kind === 'code' && (
-        <ActivationCode username={dialog.username} code={dialog.code} onClose={() => setDialog(null)} />
+        <ActivationCode
+          username={dialog.username}
+          code={dialog.code}
+          pending={dialog.pending}
+          onClose={() => setDialog(null)}
+        />
       )}
     </>
   );

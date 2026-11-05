@@ -741,6 +741,10 @@ td {
 .alert-list li {
   padding: 4px 0;
 }
+.card-subhead {
+  font-size: 13px;
+  margin: 10px 0 2px;
+}
 .kv-row {
   display: contents;
 }

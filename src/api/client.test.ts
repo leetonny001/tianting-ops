@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, ApiError, CANCELLED, refreshSession, resetClient, setHooks } from './client';
+import { api, ApiError, CANCELLED, download, refreshSession, resetClient, setHooks } from './client';
 import { errorText, signedOutText, textForCode, userIdFromMsg } from './errors';
 
 type Reply = { status: number; body: unknown };
@@ -174,5 +174,47 @@ describe('error text', () => {
     expect(errorText(new ApiError(429, 4291, '', undefined, { retryAfterSeconds: 870 }))).toBe(
       '尝试次数过多，请 15 分钟后再试',
     );
+  });
+});
+
+describe('download', () => {
+  it('4038 同样弹框后重放；成功时返回文件和响应头里的文件名', async () => {
+    const h = hooks();
+    setHooks(h);
+    const responses = [
+      new Response(JSON.stringify({ csrfToken: 't' })),
+      new Response(JSON.stringify({ code: 4038 }), { status: 403 }),
+      new Response('a,b\n', { headers: { 'Content-Disposition': 'attachment; filename="audit-ops-1.csv"' } }),
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => responses.shift()),
+    );
+    const f = await download('POST', '/console/api/audit/export', {});
+    expect(h.requestStepUp).toHaveBeenCalledOnce();
+    expect(f.filename).toBe('audit-ops-1.csv');
+    expect(await f.blob.text()).toBe('a,b\n');
+  });
+
+  it('错误响应按 JSON 解析；连接中途断开提示文件不完整', async () => {
+    setHooks(hooks());
+    const broken = new ReadableStream({
+      pull(c) {
+        c.error(new Error('reset'));
+      },
+    });
+    const responses = [
+      new Response(JSON.stringify({ csrfToken: 't' })),
+      new Response(JSON.stringify({ code: 4131, reason: 'auditExportTooMany' }), { status: 400 }),
+      new Response(broken),
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => responses.shift()),
+    );
+    await expect(download('POST', '/x', {})).rejects.toMatchObject({ code: 4131, reason: 'auditExportTooMany' });
+    const err = await download('POST', '/x', {}).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(errorText(err)).toBe('导出中断，文件不完整，请重试');
   });
 });

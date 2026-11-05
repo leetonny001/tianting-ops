@@ -141,7 +141,7 @@ export class Api {
   }
 }
 
-async function activate(username: string, code: string): Promise<{ api: Api; account: Account }> {
+export async function activate(username: string, code: string): Promise<{ api: Api; account: Account }> {
   const api = new Api();
   await api.call('POST', '/console/api/auth/activate', { username, code, newPassword: PASSWORD });
   const setup = await api.call<{ otpauthUri: string }>('POST', '/console/api/auth/totp/setup', {});
@@ -184,15 +184,42 @@ export async function loginApi(a: Account): Promise<Api> {
   return api;
 }
 
+/** 第二个运维超管：授予 ops_engineer 要另一个超管批准（AC-OPS-02-8）。第一次用到时创建。 */
+export async function secondRoot(): Promise<Account> {
+  const existing = readState().accounts?.root2;
+  if (existing) return existing;
+  const r = await root();
+  await r.call('POST', '/console/api/auth/step-up', { otp: await freshOtp(rootAccount().seed) });
+  const created = await r.call<{ activationCode: string }>('POST', '/console/api/accounts', {
+    username: 'root2',
+    displayName: 'root2',
+    roles: ['ops_superadmin'],
+  });
+  const { account } = await activate('root2', created.activationCode);
+  const next = readState();
+  next.accounts = { ...next.accounts, root2: account };
+  writeState(next);
+  return account;
+}
+
+/** 第二个超管批准 ops_engineer。批准后这个账号的旧会话失效，所以造账号时先批准再激活。 */
+export async function approveEngineer(accountId: string) {
+  const a = await secondRoot();
+  const b = await loginApi(a);
+  await b.call('POST', '/console/api/auth/step-up', { otp: await freshOtp(a.seed) });
+  await b.call('POST', `/console/api/accounts/${accountId}/roles/approve`, { role: 'ops_engineer' });
+}
+
 export async function provision(prefix: string, ...roles: string[]): Promise<Account> {
   const r = await root();
   await r.call('POST', '/console/api/auth/step-up', { otp: await freshOtp(rootAccount().seed) });
   const username = `${prefix}${Math.floor(Math.random() * 1e8)}`;
-  const created = await r.call<{ activationCode: string }>('POST', '/console/api/accounts', {
+  const created = await r.call<{ id: string; activationCode: string }>('POST', '/console/api/accounts', {
     username,
     displayName: username,
     roles,
   });
+  if (roles.includes('ops_engineer')) await approveEngineer(created.id);
   const { account } = await activate(username, created.activationCode);
   return account;
 }

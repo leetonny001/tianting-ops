@@ -17,6 +17,8 @@ export interface AccountRow {
   createdAt: number;
   activatedAt: number;
   locked: boolean;
+  /** 已授予、等另一名超管批准的角色（F-OPS-02 规则 6）。 */
+  pendingRoles?: { role: string; requestedBy: string; requestedAt: number }[];
 }
 
 export interface UserRow {

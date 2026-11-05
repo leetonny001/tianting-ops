@@ -11,6 +11,7 @@ import { NodesPage } from './pages/Nodes';
 import { NotificationsPage } from './pages/Notifications';
 import { OverviewPage } from './pages/Overview';
 import { SettingsPage } from './pages/Settings';
+import { SilencesPage } from './pages/Silences';
 import { TroubleshootPage } from './pages/Troubleshoot';
 import { useSession } from './session';
 
@@ -63,6 +64,14 @@ export function App() {
         element={
           <Guard perm="ops.troubleshoot">
             <TroubleshootPage />
+          </Guard>
+        }
+      />
+      <Route
+        path="/silences"
+        element={
+          <Guard perm="ops.silence.write">
+            <SilencesPage />
           </Guard>
         }
       />

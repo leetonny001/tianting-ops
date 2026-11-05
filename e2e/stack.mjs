@@ -2,7 +2,7 @@
 // Prometheus、Alertmanager、备份桶、Grafana 在开发机上没有，用这里的假服务（只模拟接口，能开关）。
 // 这些组件的真实联调要等测试环境（BE-320）。
 import { execFileSync, spawn } from 'node:child_process';
-import { generateKeyPairSync, randomBytes } from 'node:crypto';
+import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -53,7 +53,16 @@ const tableFile = join(work, 'nodes.json');
 writeFileSync(tableFile, JSON.stringify(table), { mode: 0o600 });
 
 // 假 Prometheus：按查询语句回固定结果，可以关掉。
-const state = { promDown: false, amDown: false, s3Down: false, alerts: [], manifests: new Map(), grafanaHits: [] };
+const state = {
+  promDown: false,
+  amDown: false,
+  s3Down: false,
+  alerts: [],
+  silences: new Map(),
+  amRequests: [],
+  manifests: new Map(),
+  grafanaHits: [],
+};
 const vec = (rows) => rows.map(([code, v]) => ({ metric: code ? { code } : {}, value: [1, String(v)] }));
 createServer((req, res) => {
   if (state.promDown) {
@@ -87,12 +96,44 @@ createServer((req, res) => {
   res.end(JSON.stringify({ status: 'success', data: { resultType: 'vector', result: vec(rows) } }));
 }).listen(P.prom, '127.0.0.1');
 
-createServer((_req, res) => {
+// 假 Alertmanager：符合 v2 API 的告警和静默接口，校验请求内容，记下收到的请求。真实的要到测试环境（tools/ops-accept 的 silence 步骤）。
+createServer(async (req, res) => {
+  const chunks = [];
+  for await (const c of req) chunks.push(c);
+  const text = Buffer.concat(chunks).toString();
+  const path = new URL(req.url, 'http://x').pathname;
+  state.amRequests.push({ method: req.method, path, body: text ? JSON.parse(text) : null });
   if (state.amDown) {
     res.writeHead(503).end();
     return;
   }
-  res.end(JSON.stringify(state.alerts));
+  const one = /^\/api\/v2\/silence\/([^/]+)$/.exec(path);
+  if (req.method === 'GET' && path === '/api/v2/alerts') {
+    res.end(JSON.stringify(state.alerts));
+  } else if (req.method === 'GET' && path === '/api/v2/silences') {
+    res.end(JSON.stringify([...state.silences.values()]));
+  } else if (req.method === 'POST' && path === '/api/v2/silences') {
+    const b = JSON.parse(text);
+    const valid =
+      Array.isArray(b.matchers) &&
+      b.matchers.length > 0 &&
+      b.matchers.every((m) => m.name && typeof m.value === 'string' && typeof m.isRegex === 'boolean') &&
+      b.createdBy &&
+      b.comment &&
+      Date.parse(b.endsAt) > Date.parse(b.startsAt);
+    if (!valid) {
+      res.writeHead(400).end('invalid silence');
+      return;
+    }
+    const id = randomUUID();
+    state.silences.set(id, { ...b, id, status: { state: 'active' } });
+    res.end(JSON.stringify({ silenceID: id }));
+  } else if (one && state.silences.has(one[1])) {
+    if (req.method === 'DELETE') state.silences.get(one[1]).status.state = 'expired';
+    res.end(req.method === 'GET' ? JSON.stringify(state.silences.get(one[1])) : '');
+  } else {
+    res.writeHead(404).end();
+  }
 }).listen(P.am, '127.0.0.1');
 
 // 假备份桶：真实的签名和权限在 console-server 的 Go 测试里校验过，这里只回内容。
@@ -221,6 +262,9 @@ createServer(async (req, res) => {
     case '/manifests/clear':
       state.manifests.clear();
       res.end('{}');
+      return;
+    case '/am-requests':
+      res.end(JSON.stringify(state.amRequests));
       return;
     case '/grafana-hits':
       res.end(JSON.stringify(state.grafanaHits));

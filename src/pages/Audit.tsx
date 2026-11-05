@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { api } from '../api/client';
+import { api, download } from '../api/client';
 import type { AuditRecord } from '../api/types';
 import { Badge, Empty, ErrorNote, Field, Modal, Text } from '../components/ui';
+import { saveBlob } from '../lib/download';
 import { actionNames, formatTime, resultNames } from '../lib/format';
 
 const DAY = 24 * 3600 * 1000;
@@ -187,6 +188,8 @@ export function AuditPage() {
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [detail, setDetail] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exported, setExported] = useState('');
   const span = new Date(to).getTime() - new Date(from).getTime();
   const tooLong = span > MAX_DAYS * DAY;
   const invalid = !from || !to || span < 0 || tooLong;
@@ -219,6 +222,30 @@ export function AuditPage() {
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!invalid) void query(0);
+  };
+  /** 导出当前筛选条件（F-CON-09 规则 7）。条件在请求体里，不进 URL；需要重新验证时由客户端弹框后重放。 */
+  const exportCsv = async () => {
+    setExporting(true);
+    setError(null);
+    setExported('');
+    try {
+      const file = await download('POST', '/console/api/audit/export', {
+        from: new Date(from).getTime(),
+        to: new Date(to).getTime(),
+        space,
+        actor: actor.trim(),
+        action,
+        target: target.trim(),
+        result,
+        requestId: requestId.trim(),
+      });
+      saveBlob(file.blob, file.filename);
+      setExported(file.filename);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setExporting(false);
+    }
   };
   return (
     <>
@@ -275,10 +302,18 @@ export function AuditPage() {
         <div className="filters-submit">
           <button className="btn btn-primary" type="submit" disabled={invalid || busy}>
             查询
+          </button>{' '}
+          <button type="button" className="btn" disabled={invalid || exporting} onClick={exportCsv}>
+            {exporting ? '导出中…' : '导出 CSV'}
           </button>
         </div>
       </form>
       <ErrorNote error={error} />
+      {exported && (
+        <p className="note" role="status">
+          已导出 <Text>{exported}</Text>。导出记录已写入审计。
+        </p>
+      )}
       {records && records.length === 0 && <Empty>没有符合条件的记录</Empty>}
       {records && records.length > 0 && (
         <table>

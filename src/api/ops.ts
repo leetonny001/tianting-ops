@@ -55,6 +55,27 @@ export interface Alert {
   summary: string;
 }
 
+export interface SilenceMatcher {
+  name: string;
+  value: string;
+  isRegex: boolean;
+  isEqual: boolean;
+}
+
+/** 当前生效的静默（F-OPS-18 规则 4）。 */
+export interface Silence {
+  id: string;
+  matchers: SilenceMatcher[];
+  createdBy: string;
+  startsAt: string;
+  endsAt: string;
+}
+
+export interface AlertsCard {
+  list: Alert[];
+  silences?: Silence[] | Unavailable;
+}
+
 export interface Overview {
   status: 'ok' | 'degraded' | 'down';
   versions: VersionsView;
@@ -63,7 +84,7 @@ export interface Overview {
   messages: { perSecond: number; today: number } | Unavailable;
   errors: { share5xx: number; share4xx: number; total: number; top: CodeCount[] } | Unavailable;
   disconnects: { handshake: CodeCount[]; sessionTop3: CodeCount[] } | Unavailable;
-  alerts: { list: Alert[] } | Unavailable;
+  alerts: AlertsCard | Unavailable;
   backup: { sources: { source: string; lastSuccessAt: number; overdue: boolean }[] } | Unavailable;
 }
 

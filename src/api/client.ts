@@ -101,13 +101,42 @@ export async function api<T = Record<string, unknown>>(
   body?: unknown,
   opts: CallOptions = {},
 ): Promise<T> {
+  return request(method, path, body, opts, parse<T>);
+}
+
+export interface Download {
+  blob: Blob;
+  filename: string;
+}
+
+/** 下载文件（审计导出）。错误码的处理和 api 一样，4038 同样弹框后重放。文件只留在内存里，交给浏览器保存。 */
+export async function download(method: string, path: string, body?: unknown): Promise<Download> {
+  return request(method, path, body, {}, async (resp) => {
+    if (!resp.ok) return parse<Download>(resp);
+    const name = /filename="([^"]+)"/.exec(resp.headers.get('Content-Disposition') ?? '')?.[1];
+    try {
+      return { blob: await resp.blob(), filename: name ?? 'export.csv' };
+    } catch {
+      // 状态码已经是 200，服务端中途出错时只能断开连接：这份文件不完整。
+      throw new ApiError(0, NETWORK, 'download interrupted', 'downloadInterrupted');
+    }
+  });
+}
+
+async function request<T>(
+  method: string,
+  path: string,
+  body: unknown,
+  opts: CallOptions,
+  read: (resp: Response) => Promise<T>,
+): Promise<T> {
   // 刷新页面后内存里没有令牌：写操作之前先取（AC-CON-05-10）。
   if (!isSafe(method) && !csrfToken && !opts.raw) await refreshSession().catch(() => undefined);
   let replayedCsrf = false;
   let replayedStepUp = false;
   for (;;) {
     try {
-      return await parse<T>(await send(method, path, body, opts));
+      return await read(await send(method, path, body, opts));
     } catch (err) {
       if (!(err instanceof ApiError) || opts.raw) throw err;
       if (err.code === 4014) {

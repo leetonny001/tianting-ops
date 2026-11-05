@@ -11,7 +11,8 @@ function payloadText(p: Record<string, unknown>): string {
   else if (p.who) parts.push(String(p.who));
   if (p.ip) parts.push(`来源 ${String(p.ip)}`);
   if (p.left !== undefined) parts.push(`剩余 ${String(p.left)} 个`);
-  if (p.role) parts.push(`角色 ${String(p.role)}`);
+  if (p.role) parts.push(`角色 ${String(p.role)}${p.pending ? '（待批准）' : ''}`);
+  if (p.count !== undefined) parts.push(`1 小时内查询了 ${String(p.count)} 个不同用户`);
   if (p.issue) parts.push(String(p.issue));
   if (p.seq) parts.push(`seq ${String(p.seq)}`);
   return parts.join('，');

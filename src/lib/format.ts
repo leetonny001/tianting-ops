@@ -46,6 +46,10 @@ export const actionNames: Record<string, string> = {
   'ops.troubleshoot.query': '连接排查',
   'ops.config.view': '查看配置检查',
   'ops.grafana.enter': '进入指标',
+  'ops.silence.create': '创建告警静默',
+  'ops.silence.expire': '提前结束告警静默',
+  'ops.audit.export': '导出审计',
+  'audit.export': '导出审计',
   'user.kick': '强制下线',
   'user.sessions.query': '查看在线设备',
   'user.import': '导入用户',
@@ -75,6 +79,7 @@ export const actionNames: Record<string, string> = {
   'auth.recovery_codes_regenerated': '重新生成恢复码',
   'account.create': '新建账号',
   'account.roles': '修改角色',
+  'account.role_approve': '批准角色授予',
   'account.disable': '停用账号',
   'account.enable': '启用账号',
   'account.reset': '重置账号',
@@ -100,6 +105,7 @@ export const notificationNames: Record<string, string> = {
   'account.emergency_grant': '应急授权',
   'audit.verify_failed': '审计校验失败',
   'audit.anchor_failed': '审计锚定失败',
+  'ops.troubleshoot_anomaly': '异常查询：短时间内排查了大量用户',
 };
 
 export function formatBytes(n?: number): string {
@@ -121,3 +127,12 @@ export function formatDuration(ms: number): string {
 }
 
 export const ticketPattern = /^[A-Za-z0-9_-]{3,32}$/;
+
+/** 静默的匹配条件。console 创建的只有等值；用 amtool 建的可能有别的，照实显示。 */
+export function matcherText(m: { name: string; value: string; isRegex: boolean; isEqual: boolean }): string {
+  const op = m.isRegex ? (m.isEqual ? '=~' : '!~') : m.isEqual ? '=' : '!=';
+  return `${m.name}${op}${m.value}`;
+}
+
+/** 和服务端相同的匹配条件规则，前端先挡一次。 */
+export const alertNamePattern = /^[\p{L}\p{N}_.-][\p{L}\p{N}_. -]{0,127}$/u;

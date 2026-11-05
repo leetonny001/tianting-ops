@@ -14,6 +14,11 @@ const byReason: Record<string, string> = {
   containsUsername: '密码不能包含账号名',
   weak: '密码太常见，请换一个',
   reused: '不能使用最近用过的密码',
+  silenceMatcherInvalid: '匹配条件不正确：只能按告警名和节点等值匹配，至少填一个，不支持正则',
+  silenceDurationInvalid: '时长需要在 15 分钟到 24 小时之间',
+  ownGrant: '不能批准自己发起的授予，需要另一名运维超管批准',
+  auditExportTooMany: '符合条件的记录超过 1 万条，请缩小时间范围或增加筛选条件后再导出',
+  downloadInterrupted: '导出中断，文件不完整，请重试',
 };
 
 const byCode: Record<number, string> = {
@@ -58,6 +63,7 @@ export function textForCode(code: number, msg = '', reason?: string): string {
 
 export function errorText(err: unknown): string {
   if (!(err instanceof ApiError)) return '出错了，请重试';
+  if (err.code === NETWORK && err.reason) return textForCode(err.code, err.message, err.reason);
   if (err.code === NETWORK) return '网络不通，请检查 VPN 后重试';
   if (err.code === 4291) {
     const seconds = Number(err.details?.retryAfterSeconds ?? 0);

@@ -11,6 +11,7 @@ const menu: { to: string; label: string; perm: string; end?: boolean }[] = [
   { to: '/', label: '总览', perm: 'ops.overview.read', end: true },
   { to: '/nodes', label: '节点', perm: 'ops.overview.read' },
   { to: '/troubleshoot', label: '连接排查', perm: 'ops.troubleshoot' },
+  { to: '/silences', label: '告警静默', perm: 'ops.silence.write' },
   { to: '/config', label: '配置检查', perm: 'ops.config.read' },
   { to: '/database', label: '数据库与备份', perm: 'ops.config.read' },
   { to: '/audit', label: '审计日志', perm: 'ops.audit.read' },

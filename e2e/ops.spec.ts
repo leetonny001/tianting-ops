@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import {
+  approveEngineer,
   clockNow,
   pauseNode,
   resumeNode,
@@ -42,11 +43,12 @@ test('还没有账号时提示用命令行创建；激活流程（AC-OPS-01-5）
   const r = await root();
   await r.call('POST', '/console/api/auth/step-up', { otp: await freshOtp(rootAccount().seed) });
   const name = uid('neweng');
-  const { activationCode } = await r.call<{ activationCode: string }>('POST', '/console/api/accounts', {
+  const { id, activationCode } = await r.call<{ id: string; activationCode: string }>('POST', '/console/api/accounts', {
     username: name,
     displayName: name,
     roles: ['ops_engineer'],
   });
+  await approveEngineer(id);
   await page.goto('/activate');
   await page.getByLabel('账号').fill(name);
   await page.getByLabel('激活码').fill(activationCode);

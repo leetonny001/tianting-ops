@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
-import { isUnavailable, type Overview } from '../api/ops';
+import { isUnavailable, type AlertsCard, type Overview } from '../api/ops';
 import { errorText } from '../api/errors';
 import { PageError, PartialBanner, RefreshTools, UnavailableNote, useOpsData } from '../components/Common';
 import { openGrafana } from '../components/Layout';
 import { Empty, Text } from '../components/ui';
-import { formatDuration, formatTime } from '../lib/format';
+import { formatDuration, formatTime, matcherText } from '../lib/format';
 
 const statusText = { ok: '正常', degraded: '降级', down: '不可用' };
 const percent = (v: number) => `${(v * 100).toFixed(1)}%`;
@@ -27,6 +27,27 @@ function GrafanaLink({ label }: { label: string }) {
           {error}
         </span>
       )}
+    </>
+  );
+}
+
+/** 当前生效的静默：匹配条件、创建人、到期时间（F-OPS-18 规则 4）。读不到时说读不到，不说没有。 */
+function ActiveSilences({ silences }: { silences: AlertsCard['silences'] }) {
+  if (isUnavailable(silences)) return <UnavailableNote card={silences} text="静默数据不可用" />;
+  if (!silences?.length) return null;
+  return (
+    <>
+      <h3 className="card-subhead">生效中的静默（{silences.length}）</h3>
+      <ul className="alert-list">
+        {silences.map((s) => (
+          <li key={s.id}>
+            <Text>{s.matchers.map(matcherText).join('，')}</Text>
+            <div className="card-sub">
+              <Text>{s.createdBy}</Text> 创建，到期 {formatTime(Date.parse(s.endsAt))}
+            </div>
+          </li>
+        ))}
+      </ul>
     </>
   );
 }
@@ -144,24 +165,29 @@ export function OverviewPage() {
             <h2>告警</h2>
             {isUnavailable(d.alerts) ? (
               <UnavailableNote card={d.alerts} text="告警数据不可用" />
-            ) : d.alerts.list.length === 0 ? (
-              <Empty>当前没有告警</Empty>
             ) : (
-              <ul className="alert-list">
-                {d.alerts.list.map((a) => (
-                  <li key={`${a.name}-${a.node}-${a.startsAt}`}>
-                    <strong>
-                      <Text>{a.name}</Text>
-                    </strong>{' '}
-                    <span className={a.severity === 'critical' ? 'badge badge-bad' : 'badge badge-warn'}>
-                      <Text>{a.severity}</Text>
-                    </span>
-                    <div className="card-sub">
-                      <Text>{a.node || '全局'}</Text>，开始于 {formatTime(Date.parse(a.startsAt))}
-                    </div>
-                  </li>
-                ))}
-              </ul>
+              <>
+                {d.alerts.list.length === 0 ? (
+                  <Empty>当前没有告警</Empty>
+                ) : (
+                  <ul className="alert-list">
+                    {d.alerts.list.map((a) => (
+                      <li key={`${a.name}-${a.node}-${a.startsAt}`}>
+                        <strong>
+                          <Text>{a.name}</Text>
+                        </strong>{' '}
+                        <span className={a.severity === 'critical' ? 'badge badge-bad' : 'badge badge-warn'}>
+                          <Text>{a.severity}</Text>
+                        </span>
+                        <div className="card-sub">
+                          <Text>{a.node || '全局'}</Text>，开始于 {formatTime(Date.parse(a.startsAt))}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <ActiveSilences silences={d.alerts.silences} />
+              </>
             )}
           </section>
         </div>
