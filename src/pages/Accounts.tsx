@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { api } from '../api/client';
-import type { AccountRow } from '../api/types';
+import { api, ApiError } from '../api/client';
+import type { AccountRow, PendingRole } from '../api/types';
 import { Badge, ConfirmDialog, CopyButton, Empty, ErrorNote, Field, Modal, Text } from '../components/ui';
 import { formatTime, roleNames } from '../lib/format';
 import { useSession } from '../session';
@@ -31,11 +31,17 @@ function RolePicker({ value, onChange }: { value: string[]; onChange: (v: string
 }
 
 /** 授予后不马上生效的角色（F-OPS-02 规则 6）。这里只是提示，以服务端返回的 pendingRoles 为准。 */
-const NEEDS_APPROVAL = ['ops_engineer'];
+const NEEDS_APPROVAL = ['ops_engineer', 'ops_superadmin'];
 
 function ApprovalHint({ roles, before = [] }: { roles: string[]; before?: string[] }) {
-  if (!roles.some((r) => NEEDS_APPROVAL.includes(r) && !before.includes(r))) return null;
-  return <p className="note note-warn">授予排障工程师需要另一名运维超管批准后才生效。</p>;
+  const needed = roles.filter((r) => NEEDS_APPROVAL.includes(r) && !before.includes(r));
+  if (needed.length === 0) return null;
+  return (
+    <p className="note note-warn">
+      授予{needed.map((r) => roleNames[r] ?? r).join('、')}
+      需要另一名运维超管批准后才生效，7 天内没有处理会自动失效。批准之前账号的权限不变。
+    </p>
+  );
 }
 
 function ActivationCode({
@@ -77,7 +83,8 @@ type Dialog =
   | { kind: 'roles'; account: AccountRow }
   | { kind: 'action'; account: AccountRow; action: 'disable' | 'enable' | 'reset' | 'unlock' }
   | { kind: 'code'; username: string; code: string; pending?: string[] }
-  | { kind: 'approve'; account: AccountRow; role: string; requestedBy: string }
+  | { kind: 'approve'; account: AccountRow; pending: PendingRole }
+  | { kind: 'reject'; account: AccountRow; pending: PendingRole }
   | null;
 
 const actionText = {
@@ -149,8 +156,15 @@ function CreateDialog({
 }
 
 function RolesDialog({ account, onClose, onDone }: { account: AccountRow; onClose: () => void; onDone: () => void }) {
-  // 待批准的角色算在里面：不勾掉就继续等批准，勾掉就撤回。
-  const [roles, setRoles] = useState(() => [...account.roles, ...(account.pendingRoles ?? []).map((p) => p.role)]);
+  // 显示这次改动批准之后的角色：不勾掉待批准的就继续等批准，勾掉就撤回。
+  const [roles, setRoles] = useState(() => {
+    const pending = account.pendingRoles ?? [];
+    const replaced = pending.flatMap((p) => p.replaces ?? []);
+    return [
+      ...account.roles.filter((r) => !replaced.includes(r)),
+      ...pending.flatMap((p) => [...(p.with ?? []), p.role]),
+    ];
+  });
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const submit = async (e: FormEvent) => {
@@ -189,6 +203,7 @@ export function AccountsPage() {
   const [list, setList] = useState<AccountRow[]>([]);
   const [error, setError] = useState<unknown>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
+  const [stale, setStale] = useState(false);
   const load = () => {
     api<{ accounts: AccountRow[] }>('GET', '/console/api/accounts?limit=100')
       .then((r) => setList(r.accounts))
@@ -196,6 +211,17 @@ export function AccountsPage() {
   };
   useEffect(load, []);
   const selfId = session?.account.id;
+  // 过期、别人已经处理、账号状态变了（4093）：这条已经不能操作，提示并刷新，不留在框里（FE-522）。
+  const decide = async (fn: () => Promise<unknown>) => {
+    setStale(false);
+    try {
+      await fn();
+    } catch (err) {
+      if (!(err instanceof ApiError) || err.code !== 4093) throw err;
+      setStale(true);
+    }
+    load();
+  };
   return (
     <>
       <div className="page-head">
@@ -205,6 +231,11 @@ export function AccountsPage() {
         </button>
       </div>
       <ErrorNote error={error} />
+      {stale && (
+        <p className="note note-warn" role="status">
+          这条待批准已经失效：可能已过期、已被别人处理，或者账号的状态和角色已经变了。列表已刷新。
+        </p>
+      )}
       <table>
         <thead>
           <tr>
@@ -231,7 +262,7 @@ export function AccountsPage() {
                   <div key={p.role}>
                     <Badge tone="warn">待批准</Badge> {roleNames[p.role] ?? p.role}
                     <div className="muted">
-                      <Text>{p.requestedBy}</Text> 发起
+                      <Text>{p.requestedBy}</Text> 发起，{formatTime(p.expiresAt)} 到期
                       {p.requestedBy === session?.account.username && '，需要另一名运维超管批准'}
                     </div>
                   </div>
@@ -251,14 +282,22 @@ export function AccountsPage() {
               <td className="actions">
                 {/* 谁能批准只由服务端判断：发起人点了会收到 4030，界面不替它决定（FE-521）。 */}
                 {a.pendingRoles?.map((p) => (
-                  <button
-                    key={p.role}
-                    type="button"
-                    className="link"
-                    onClick={() => setDialog({ kind: 'approve', account: a, role: p.role, requestedBy: p.requestedBy })}
-                  >
-                    批准
-                  </button>
+                  <span key={p.role} className="actions">
+                    <button
+                      type="button"
+                      className="link"
+                      onClick={() => setDialog({ kind: 'approve', account: a, pending: p })}
+                    >
+                      批准
+                    </button>
+                    <button
+                      type="button"
+                      className="link"
+                      onClick={() => setDialog({ kind: 'reject', account: a, pending: p })}
+                    >
+                      {p.requestedBy === session?.account.username ? '撤回' : '拒绝'}
+                    </button>
+                  </span>
                 ))}
                 {a.id === selfId ? (
                   <span className="muted">自己的账号</span>
@@ -351,13 +390,35 @@ export function AccountsPage() {
           title={`批准 ${dialog.account.username} 的角色`}
           confirmLabel="批准"
           onClose={() => setDialog(null)}
-          onConfirm={async () => {
-            await api('POST', `/console/api/accounts/${dialog.account.id}/roles/approve`, { role: dialog.role });
-            load();
-          }}
+          onConfirm={() =>
+            decide(() =>
+              api('POST', `/console/api/accounts/${dialog.account.id}/roles/approve`, { role: dialog.pending.role }),
+            )
+          }
         >
-          <Text>{dialog.requestedBy}</Text> 授予 <Text>{dialog.account.username}</Text> 角色「
-          {roleNames[dialog.role] ?? dialog.role}」。批准后马上生效，该账号需要重新登录。
+          <Text>{dialog.pending.requestedBy}</Text> 授予 <Text>{dialog.account.username}</Text> 角色「
+          {roleNames[dialog.pending.role] ?? dialog.pending.role}」。批准后马上生效，该账号需要重新登录。
+        </ConfirmDialog>
+      )}
+      {dialog?.kind === 'reject' && (
+        <ConfirmDialog
+          title={`拒绝 ${dialog.account.username} 的角色`}
+          needReason
+          noTicket
+          danger
+          confirmLabel="拒绝"
+          onClose={() => setDialog(null)}
+          onConfirm={({ reason }) =>
+            decide(() =>
+              api('POST', `/console/api/accounts/${dialog.account.id}/roles/reject`, {
+                role: dialog.pending.role,
+                reason,
+              }),
+            )
+          }
+        >
+          <Text>{dialog.pending.requestedBy}</Text> 授予 <Text>{dialog.account.username}</Text> 角色「
+          {roleNames[dialog.pending.role] ?? dialog.pending.role}」。拒绝后账号的角色不变。
         </ConfirmDialog>
       )}
       {dialog?.kind === 'code' && (

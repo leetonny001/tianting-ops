@@ -120,6 +120,7 @@ export function ConfirmDialog({
   title,
   children,
   needReason,
+  noTicket,
   confirmText,
   confirmLabel = '确认',
   danger,
@@ -129,6 +130,8 @@ export function ConfirmDialog({
   title: string;
   children: ReactNode;
   needReason?: boolean;
+  /** 这个操作的接口不收工单号时不显示。 */
+  noTicket?: boolean;
   confirmText?: string;
   confirmLabel?: string;
   danger?: boolean;
@@ -170,9 +173,11 @@ export function ConfirmDialog({
                 <textarea id={id} rows={2} value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />
               )}
             </Field>
-            <Field label="工单号（可选）">
-              {(id) => <input id={id} value={ticket} onChange={(e) => setTicket(e.target.value)} />}
-            </Field>
+            {!noTicket && (
+              <Field label="工单号（可选）">
+                {(id) => <input id={id} value={ticket} onChange={(e) => setTicket(e.target.value)} />}
+              </Field>
+            )}
           </>
         )}
         {confirmText && (

@@ -168,6 +168,8 @@ export async function root(): Promise<Api> {
     const next = readState();
     next.accounts = { ...next.accounts, root1: account };
     writeState(next);
+    // 第二个超管也是命令行建的，时钟要和第一个一样：命令行的激活码按真实时钟算 24 小时，别的用例推进时钟之后就过期了。
+    await secondRoot();
     return api;
   }
   // 每次都重新登录：别的用例可能把时钟推进了很久，旧会话已经过期。
@@ -184,18 +186,12 @@ export async function loginApi(a: Account): Promise<Api> {
   return api;
 }
 
-/** 第二个运维超管：授予 ops_engineer 要另一个超管批准（AC-OPS-02-8）。第一次用到时创建。 */
+/** 第二个运维超管：只能走命令行（AC-OPS-01-19），网页上授予超管也要第二个人批准。 */
 export async function secondRoot(): Promise<Account> {
   const existing = readState().accounts?.root2;
   if (existing) return existing;
-  const r = await root();
-  await r.call('POST', '/console/api/auth/step-up', { otp: await freshOtp(rootAccount().seed) });
-  const created = await r.call<{ activationCode: string }>('POST', '/console/api/accounts', {
-    username: 'root2',
-    displayName: 'root2',
-    roles: ['ops_superadmin'],
-  });
-  const { account } = await activate('root2', created.activationCode);
+  const { code } = (await control('/bootstrap', { username: 'root2' })) as { code: string };
+  const { account } = await activate('root2', code);
   const next = readState();
   next.accounts = { ...next.accounts, root2: account };
   writeState(next);

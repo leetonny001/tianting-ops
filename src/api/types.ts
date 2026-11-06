@@ -18,7 +18,18 @@ export interface AccountRow {
   activatedAt: number;
   locked: boolean;
   /** 已授予、等另一名超管批准的角色（F-OPS-02 规则 6）。 */
-  pendingRoles?: { role: string; requestedBy: string; requestedAt: number }[];
+  pendingRoles?: PendingRole[];
+}
+
+export interface PendingRole {
+  role: string;
+  requestedBy: string;
+  requestedAt: number;
+  /** 7 天后失效（服务端按 [C 钟] 判断），过期的不会出现在这里。 */
+  expiresAt: number;
+  /** 批准时去掉的现有角色、一起生效的角色。批准之前账号的权限不变。 */
+  replaces?: string[];
+  with?: string[];
 }
 
 export interface UserRow {

@@ -273,3 +273,162 @@ test('异常查询通知：审计员看到账号名和数量，没有 userId（A
   const body = await page.locator('body').innerText();
   for (const id of ids) expect(body).not.toContain(id);
 });
+
+const accountsApi = '/console/api/accounts';
+
+/** A 用接口授予 X 排障工程师（X 现有角色不变），返回 X 的 id。 */
+async function grantEngineer(a: Account, name: string, roles = ['ops_viewer']) {
+  const api = await loginApi(a);
+  await api.call('POST', '/console/api/auth/step-up', { otp: await freshOtp(a.seed) });
+  const created = await api.call<{ id: string }>('POST', accountsApi, { username: name, displayName: name, roles });
+  await api.call('POST', `${accountsApi}/${created.id}/roles`, { roles: [...roles, 'ops_engineer'] });
+  return created.id;
+}
+
+test('新建超管也要批准；拒绝要理由和重新验证；发起人可以撤回（AC-OPS-02-10、02-11）', async ({ page, browser }) => {
+  const problems = watchPage(page);
+  const a = rootAccount();
+  const rootB = await secondRoot();
+  await login(page, a);
+  await page.goto('/accounts');
+
+  // A 新建超管 Y：待批准，显示发起人、到期时间。
+  const name = uid('ysup');
+  await page.getByRole('button', { name: '新建账号' }).click();
+  const create = page.getByRole('dialog', { name: '新建账号' });
+  await create.getByLabel('账号名').fill(name);
+  await create.getByLabel('显示名').fill(name);
+  await create.getByLabel('运维超管').check();
+  await expect(create).toContainText('授予运维超管需要另一名运维超管批准后才生效');
+  await create.getByRole('button', { name: '创建' }).click();
+  await passStepUp(page, a);
+  const codeDlg = page.getByRole('dialog', { name: '激活码' });
+  await expect(codeDlg).toContainText('运维超管角色待批准');
+  const code = await codeDlg.getByTestId('activation-code').innerText();
+  await codeDlg.getByRole('button', { name: '我已记下' }).click();
+  const row = page.getByRole('row').filter({ hasText: name });
+  await expect(row).toContainText('待批准');
+  await expect(row).toContainText(`${a.username} 发起`);
+  await expect(row).toContainText('到期');
+
+  // Y 激活后只有"只需登录"的权限。
+  const { api: y, account: yAccount } = await activate(name, code);
+  const manage = (api: Api) =>
+    api
+      .call('GET', accountsApi)
+      .then(() => 'ok')
+      .catch((e: Error) => e.message);
+  expect(await manage(y)).toContain('403');
+
+  // B 拒绝：没有理由不能提交；理由之后走重新验证；拒绝后 Y 还是没有权限。
+  const bCtx = await browser.newContext({ baseURL: 'http://ops.localhost:18290' });
+  const bPage = await bCtx.newPage();
+  await login(bPage, rootB);
+  await bPage.goto('/accounts');
+  const bRow = bPage.getByRole('row').filter({ hasText: name });
+  await bRow.getByRole('button', { name: '拒绝' }).click();
+  const reject = bPage.getByRole('dialog', { name: `拒绝 ${name} 的角色` });
+  await expect(reject.getByRole('button', { name: '拒绝' })).toBeDisabled();
+  await reject.getByLabel('理由').fill(REASON);
+  await reject.getByRole('button', { name: '拒绝' }).click();
+  await passStepUp(bPage, rootB);
+  await expect(reject).toHaveCount(0);
+  await expect(bRow).not.toContainText('待批准');
+  expect(await manage(y)).toContain('403');
+
+  // A 的页面还是旧的：再点批准，提示已失效并刷新。
+  await row.getByRole('button', { name: '批准' }).click();
+  const staleDlg = page.getByRole('dialog', { name: `批准 ${name} 的角色` });
+  await staleDlg.getByRole('button', { name: '批准' }).click();
+  await expect(staleDlg).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText('这条待批准已经失效');
+  await expect(row).not.toContainText('待批准');
+
+  // A 再发起一次，自己撤回。
+  const apiA = await loginApi(a);
+  await apiA.call('POST', '/console/api/auth/step-up', { otp: await freshOtp(a.seed) });
+  const id = (
+    await apiA.call<{ accounts: { id: string; username: string }[] }>('GET', `${accountsApi}?username=${name}`)
+  ).accounts[0]!.id;
+  await apiA.call('POST', `${accountsApi}/${id}/roles`, { roles: ['ops_superadmin'] });
+  await page.reload();
+  await expect(row).toContainText('待批准');
+  await row.getByRole('button', { name: '撤回' }).click();
+  const withdraw = page.getByRole('dialog', { name: `拒绝 ${name} 的角色` });
+  await withdraw.getByLabel('理由').fill(REASON);
+  await withdraw.getByRole('button', { name: '拒绝' }).click();
+  await expect(withdraw).toHaveCount(0);
+  await expect(row).not.toContainText('待批准');
+
+  // 再发起一次，B 批准：Y 重新登录后能管理账号。
+  await apiA.call('POST', '/console/api/auth/step-up', { otp: await freshOtp(a.seed) });
+  await apiA.call('POST', `${accountsApi}/${id}/roles`, { roles: ['ops_superadmin'] });
+  await bPage.reload();
+  await bRow.getByRole('button', { name: '批准' }).click();
+  const approve = bPage.getByRole('dialog', { name: `批准 ${name} 的角色` });
+  await approve.getByRole('button', { name: '批准' }).click();
+  await passStepUpIfAsked(bPage, rootB, approve);
+  await expect(approve).toHaveCount(0);
+  await expect(bRow).toContainText('运维超管');
+  await expect(bRow).not.toContainText('待批准');
+  await bCtx.close();
+  expect(await manage(y)).toContain('401');
+  expect(await manage(await loginApi(yAccount))).toBe('ok');
+  expect(problems.filter((p) => !/40[39]|401/.test(p))).toEqual([]);
+});
+
+/** step-up 还在 5 分钟内就不会弹框：弹了才走。 */
+async function passStepUpIfAsked(page: Page, a: Account, dialog: ReturnType<Page['getByRole']>) {
+  const totp = page.getByRole('dialog', { name: '输入动态码确认' });
+  await expect(totp.or(dialog)).toBeVisible();
+  if (await totp.isVisible().catch(() => false)) await passStepUp(page, a);
+}
+
+test('待批准 7 天过期：快到期还在列表，过期后批准提示已失效（AC-OPS-02-12）', async ({ page }) => {
+  const problems = watchPage(page);
+  const a = rootAccount();
+  const rootB = await secondRoot();
+  const name = uid('xexp');
+  const start = clockNow();
+  const id = await grantEngineer(a, name);
+  const expiresAt = (
+    await (
+      await loginApi(a)
+    ).call<{ pendingRoles: { expiresAt: number; requestedAt: number }[] }>('GET', `${accountsApi}/${id}`)
+  ).pendingRoles[0]!;
+  expect(expiresAt.expiresAt - expiresAt.requestedAt).toBe(7 * 86_400_000);
+  expect(expiresAt.requestedAt).toBeGreaterThanOrEqual(start);
+
+  await setClocks(expiresAt.expiresAt - 5 * 60_000);
+  await login(page, rootB);
+  await page.goto('/accounts');
+  const row = page.getByRole('row').filter({ hasText: name });
+  await expect(row).toContainText('待批准');
+
+  await setClocks(expiresAt.expiresAt + 1000);
+  await row.getByRole('button', { name: '批准' }).click();
+  const dlg = page.getByRole('dialog', { name: `批准 ${name} 的角色` });
+  await dlg.getByRole('button', { name: '批准' }).click();
+  await passStepUp(page, rootB);
+  await expect(dlg).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText('这条待批准已经失效');
+  await expect(row).not.toContainText('待批准');
+  await expect(row).toContainText('只读');
+  await page.reload();
+  await expect(row).not.toContainText('待批准');
+  // 过期审计：审计页面能看到，只有一条。
+  const auditor = await provision('xaud', 'ops_auditor');
+  await page.context().clearCookies();
+  await login(page, auditor);
+  await page.goto('/audit');
+  const audit = await (
+    await loginApi(auditor)
+  ).call<{ records: { action: string; target: string }[] }>(
+    'GET',
+    `/console/api/audit?from=${expiresAt.requestedAt}&to=${clockNow()}&action=ops.role.expire`,
+  );
+  expect(
+    audit.records.filter((r) => r.action === 'ops.role.expire' && JSON.stringify(r.target).includes(name)),
+  ).toHaveLength(1);
+  expect(problems.filter((p) => !/409/.test(p))).toEqual([]);
+});

@@ -80,12 +80,14 @@ export const actionNames: Record<string, string> = {
   'account.create': '新建账号',
   'account.roles': '修改角色',
   'account.role_approve': '批准角色授予',
+  'ops.role.reject': '拒绝角色授予',
+  'ops.role.expire': '角色授予过期',
   'account.disable': '停用账号',
   'account.enable': '启用账号',
   'account.reset': '重置账号',
   'account.unlock': '解锁账号',
   'account.emergency_grant': '应急授权',
-  'account.bootstrap': '创建首个超管',
+  'account.bootstrap': '命令行创建超管',
 };
 
 export const resultNames: Record<string, string> = {
@@ -96,6 +98,7 @@ export const resultNames: Record<string, string> = {
 };
 
 export const notificationNames: Record<string, string> = {
+  'account.bootstrap': '命令行创建了运维超管',
   'account.activated': '账号已激活',
   'account.reset': '账号被重置',
   'account.locked': '账号被锁定',

@@ -266,7 +266,7 @@ describe('双人批准（FE-521、AC-OPS-02-8）', () => {
     createdAt: 1,
     activatedAt: 1,
     locked: false,
-    pendingRoles: [{ role: 'ops_engineer', requestedBy, requestedAt: 1 }],
+    pendingRoles: [{ role: 'ops_engineer', requestedBy, requestedAt: 1, expiresAt: 2 }],
   });
   const approvePath = `/console/api/accounts/${pendingAccount('a').id}/roles/approve`;
   const open = async (user: ReturnType<typeof userEvent.setup>) => {
@@ -321,6 +321,135 @@ describe('双人批准（FE-521、AC-OPS-02-8）', () => {
     expect(within(dlg).getByLabelText('排障工程师')).toBeChecked();
     expect(within(dlg).getByLabelText('只读')).toBeChecked();
     expect(dlg).toHaveTextContent('授予排障工程师需要另一名运维超管批准后才生效');
+  });
+});
+
+describe('拒绝和过期（FE-522、AC-OPS-02-10～12）', () => {
+  const EXPIRES = Date.UTC(2027, 0, 22, 4, 0, 0); // 上海时间 2027-01-22 12:00
+  const pendingRow = (over: Record<string, unknown> = {}, pending: Record<string, unknown> = {}) => ({
+    id: '00000000-0000-4000-8000-00000000000b',
+    username: 'xnew',
+    displayName: 'xnew',
+    status: 'pending',
+    roles: [],
+    createdAt: 1,
+    activatedAt: 0,
+    locked: false,
+    pendingRoles: [
+      {
+        role: 'ops_superadmin',
+        requestedBy: 'roota',
+        requestedAt: EXPIRES - 7 * 86_400_000,
+        expiresAt: EXPIRES,
+        replaces: [],
+        with: [],
+        ...pending,
+      },
+    ],
+    ...over,
+  });
+  const LIST = 'GET /console/api/accounts?limit=100';
+  const ROLES = `/console/api/accounts/${pendingRow().id}/roles`;
+  const listCalls = () => calls.filter((c) => c.method === 'GET' && c.path === '/console/api/accounts?limit=100');
+  const clean = pendingRow({ pendingRoles: [] });
+  const mount = async (who = 'rootb') => {
+    install(me(who, ['ops.account.manage']));
+    const user = userEvent.setup();
+    page(<AccountsPage />);
+    const row = await screen.findByRole('row', { name: /xnew/ });
+    return { user, row };
+  };
+
+  it('新建超管显示待批准：发起人、目标角色、到期时间', async () => {
+    replies[LIST] = [{ body: { accounts: [pendingRow()] } }];
+    const { row } = await mount();
+    expect(row).toHaveTextContent('待批准');
+    expect(row).toHaveTextContent('运维超管');
+    expect(row).toHaveTextContent('roota 发起');
+    expect(row).toHaveTextContent('2027/01/22');
+    expect(within(row).getByRole('button', { name: '拒绝' })).toBeEnabled();
+  });
+
+  it('新建账号选超管也提示要批准', async () => {
+    replies[LIST] = [{ body: { accounts: [] } }];
+    install(me('rootb', ['ops.account.manage']));
+    const user = userEvent.setup();
+    page(<AccountsPage />);
+    await user.click(await screen.findByRole('button', { name: '新建账号' }));
+    const dlg = await screen.findByRole('dialog', { name: '新建账号', hidden: true });
+    await user.click(within(dlg).getByLabelText('运维超管'));
+    expect(dlg).toHaveTextContent('授予运维超管需要另一名运维超管批准后才生效');
+  });
+
+  it('拒绝要填理由；4038 走 TOTP 后重放；请求带角色和理由；成功后刷新', async () => {
+    replies[LIST] = [{ body: { accounts: [pendingRow()] } }, { body: { accounts: [clean] } }];
+    replies[`POST ${ROLES}/reject`] = [stepUpRequired, { body: { role: 'ops_superadmin' } }];
+    const { user, row } = await mount();
+    await user.click(within(row).getByRole('button', { name: '拒绝' }));
+    const dlg = await screen.findByRole('dialog', { name: '拒绝 xnew 的角色', hidden: true });
+    const submit = within(dlg).getByRole('button', { name: '拒绝', hidden: true });
+    expect(submit).toBeDisabled();
+    await user.type(within(dlg).getByLabelText('理由'), 'abc');
+    expect(submit).toBeDisabled();
+    expect(posts(`${ROLES}/reject`)).toHaveLength(0);
+    await user.type(within(dlg).getByLabelText('理由'), 'd 审批记录不符');
+    expect(submit).toBeEnabled();
+    await user.click(submit);
+    await passStepUp(user);
+    await waitFor(() => expect(posts(`${ROLES}/reject`)).toHaveLength(2));
+    expect(posts(`${ROLES}/reject`)[1]!.body).toEqual({ role: 'ops_superadmin', reason: 'abcd 审批记录不符' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '拒绝 xnew 的角色', hidden: true })).toBeNull());
+    await waitFor(() => expect(screen.getByRole('row', { name: /xnew/ })).not.toHaveTextContent('待批准'));
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('发起人看到的是撤回，请求同一个接口', async () => {
+    replies[LIST] = [{ body: { accounts: [pendingRow()] } }];
+    const { row } = await mount('roota');
+    expect(within(row).queryByRole('button', { name: '拒绝' })).toBeNull();
+    expect(within(row).getByRole('button', { name: '撤回' })).toBeEnabled();
+  });
+
+  it.each([
+    ['批准', '批准 xnew 的角色', 'approve'],
+    ['拒绝', '拒绝 xnew 的角色', 'reject'],
+  ])('%s时已过期或已处理（4093）：提示并刷新列表，不留在框里', async (button, title, verb) => {
+    replies[LIST] = [{ body: { accounts: [pendingRow()] } }, { body: { accounts: [clean] } }];
+    replies[`POST ${ROLES}/${verb}`] = [{ status: 409, body: { code: 4093, msg: 'no pending grant' } }];
+    const { user, row } = await mount();
+    await user.click(within(row).getByRole('button', { name: button }));
+    const dlg = await screen.findByRole('dialog', { name: title, hidden: true });
+    if (verb === 'reject') await user.type(within(dlg).getByLabelText('理由'), '审批记录不符');
+    await user.click(within(dlg).getByRole('button', { name: button, hidden: true }));
+    expect(await screen.findByRole('status')).toHaveTextContent('这条待批准已经失效');
+    expect(screen.queryByRole('dialog', { name: title, hidden: true })).toBeNull();
+    expect(listCalls()).toHaveLength(2);
+    expect(screen.getByRole('row', { name: /xnew/ })).not.toHaveTextContent('待批准');
+  });
+
+  it('其他错误还是留在框里，不当成已失效', async () => {
+    replies[LIST] = [{ body: { accounts: [pendingRow()] } }];
+    replies[`POST ${ROLES}/approve`] = [{ status: 403, body: { code: 4030, reason: 'ownGrant' } }];
+    const { user, row } = await mount();
+    await user.click(within(row).getByRole('button', { name: '批准' }));
+    const dlg = await screen.findByRole('dialog', { name: '批准 xnew 的角色', hidden: true });
+    await user.click(within(dlg).getByRole('button', { name: '批准', hidden: true }));
+    expect(await within(dlg).findByText('不能批准自己发起的授予，需要另一名运维超管批准')).toBeVisible();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('改角色：要替换现有角色的待批准按批准之后的角色勾选，不会勾出互斥组合', async () => {
+    const row = pendingRow(
+      { status: 'active', roles: ['ops_viewer'] },
+      { role: 'ops_superadmin', replaces: ['ops_viewer'] },
+    );
+    replies[LIST] = [{ body: { accounts: [row] } }];
+    const { user, row: tr } = await mount();
+    expect(tr).toHaveTextContent('只读');
+    await user.click(within(tr).getByRole('button', { name: '改角色' }));
+    const dlg = await screen.findByRole('dialog', { name: '修改 xnew 的角色', hidden: true });
+    expect(within(dlg).getByLabelText('运维超管')).toBeChecked();
+    expect(within(dlg).getByLabelText('只读')).not.toBeChecked();
   });
 });
 
